@@ -101,7 +101,7 @@
                                            ; include Interrupt flag to clear flag on start
 .equ  ADcontrStop  =  7        ; Disable ADC, set ADC divider to different values
 
-.equ  ADMUXval = 1 + 64      ;ADC channel (1) + Ref. (64=VCC , 192 = internal , 0 = external)
+.equ  ADMUXval = 1 + 0         ; ADC channel (1) + Ref. (64=VCC , 192 = internal , 0 = external)
 
                           
 
