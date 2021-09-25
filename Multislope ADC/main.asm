@@ -91,10 +91,10 @@
 #define portMUX portc            ; MUX port   , rest is input, e.g. ADC inputs
 
 ; mux setting, including fixed part (currently 0)
-#define mux0  8*7               ; Mux channel for 0 V = Nr. 7
-#define mux7  8*5               ; mux channel for 7 V ref = Nr. 5 = buffered 7 V
-#define mux1  8*2               ; mux channel 2  
-#define muxTemp  8*4            ; mux channel for diode (Temp) = Nr. 4
+#define mux0  8*7               ; Mux channel for 0 V = Nr. 7 (S8 = GNDS)
+#define mux7  8*6               ; Mux channel for 7 V ref = Nr. 6 (S7 = unbuffered 7V)
+#define mux1  8*2               ; Mux channel for Input3 = Nr. 2 (S3 = J2 Pin 3)
+#define muxTemp  8*4            ; Mux channel for diode = Nr. 4 (S5 = Temp)
 
 
 .equ  ADcontr  = (1 << aden) +  (1<< ADSC) + (1<<ADIF) + 6     ; ADC enable + start  + Flag (to clear) + clock / 64 (6 -> 125 kHz bei 8 MHz)
