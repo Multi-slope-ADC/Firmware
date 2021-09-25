@@ -96,12 +96,14 @@
 #define mux1  8*2               ; Mux channel for Input3 = Nr. 2 (S3 = J2 Pin 3)
 #define muxTemp  8*4            ; Mux channel for diode = Nr. 4 (S5 = Temp)
 
+; ATMEGA ADC setting ADMUX – ADC Multiplexer Selection Register
+#define REFS 0                  ; Reference Selection Bits (0 = external, 64=VCC , 192 = internal)
+#define ADMUXICh 0 + REFS       ; ATMEGA ADC input channel for integrator charge level - output of U13B (ADC0 = 0 ... ADC7 = 7)
+#define ADMUXSlp 1 + REFS       ; ATMEGA ADC input channel for slope output level - output of U13A (ADC0 = 0 ... ADC7 = 7)
 
 .equ  ADcontr  = (1 << aden) +  (1<< ADSC) + (1<<ADIF) + 6     ; ADC enable + start  + Flag (to clear) + clock / 64 (6 -> 125 kHz bei 8 MHz)
                                            ; include Interrupt flag to clear flag on start
 .equ  ADcontrStop  =  7        ; Disable ADC, set ADC divider to different values
-
-.equ  ADMUXval = 1 + 0         ; ADC channel (1) + Ref. (64=VCC , 192 = internal , 0 = external)
 
                           
 
@@ -120,7 +122,7 @@ start:
 	; ADC initializing
 	ldi temp, ADcontr     ; ADC config mit start
 	sts ADCSRA,temp 
-	ldi temp,  ADMUXval         ; ADC channal + speed +  Ref. . for AVCC ref. (no link needed)
+	ldi temp,  ADMUXICh         ; ADC channal + speed +  Ref. . for AVCC ref. (no link needed)
 	sts ADMUX,temp
 	
 	ldi temp, 1+2         ; Disable digital input for ADC inputs  0 and 1 
@@ -955,7 +957,7 @@ mslope2:                  ; call point for just data collection of rundown
 	st x+,coutBL
 
 	rcall readAD_wait     ; ADC right after rundown;
-	ldi temp, ADMUXval -1 ; MUX to auxiliary (for next conversion)
+	ldi temp, ADMUXSlp    ; MUX to auxiliary (for next conversion)
 	sts ADMUX,temp
 
     lds temp,par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
@@ -963,7 +965,7 @@ mslope2:                  ; call point for just data collection of rundown
 
 
 	rcall fullADC         ; 2nd reading for simpler data format , make drift visible (e.g. DA)
-	ldi temp, ADMUXval    ; MUX to res charge 
+	ldi temp, ADMUXICh    ; MUX to res charge
 	sts ADMUX,temp
 
 	rcall rundown_data
