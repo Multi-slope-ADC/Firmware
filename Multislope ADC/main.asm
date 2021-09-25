@@ -5,15 +5,14 @@
 ; Author / Copyright : Ulrich Harms
 ;  free for private and educational use, if the copyright note is kept
 ;   
-;
 ;  Hardware: 
 ;  Signal control  = PD2            active on high
 ;  Ref control     = PD3/4
 ;  MUX control     = PC3/4/5
-;  Comparator for Peak overflow   =  optional PC2 
+;  Comparator for Peak overflow   = optional PC2 
 ;  Zero comparator       = AN0/1  = D6/D7
 ;  optional comparator shift      = PD5  (adds to Signal at PD6)
-;  residual charge ADC input        = AD1 
+;  residual charge ADC input      = AD1 
 ;  opt. ADC input (e.g. temp diode, average voltage) = AD0
 
 .DEF  temp    = r16             ; scratch registers
@@ -26,7 +25,7 @@
 .DEF  coutAH  = r13
 .DEF  coutBL  = r10             ; debug info during run-up / sum 
 .DEF  coutBH  = r11
-.DEF  coutCL  = r20             ; 
+.DEF  coutCL  = r20              
 .DEF  coutCH  = r21
 
 .DEF  t1negL  = r4              ; timestamps in rundown - phase, also some other uses
@@ -35,24 +34,28 @@
 .DEF  t1posH  = r7
 .DEF  t1slowL = r8
 .DEF  t1slowH = r9
-.DEF  reg0 = r0                 ; zero register
+.DEF  reg0 = r3                 ; zero register
 .DEF  nextmux = r23             ; next mux setting (port C)
 
 .DEF w2       = r15             ; predefined value for fine delay
 .DEF slow_length = r14 
 
-; unused CPU registers: R24, R25,R3,R0,R1
+; unused CPU registers: R24, R25,R0,R1
+;  R0+R1 are used for multiplications, so better not use them 
+
 
 #define ubuffer  XL          ; pointer for UART puffer (count up)  X = R 26 / R 27
 
-#define  par_rustepsL   0x100        ; Variables in SRAM
-#define  par_rustepsH   0x101
+#define  par_rustepsL  0x100    ; Variables in SRAM
+#define  par_rustepsH  0x101
 #define  par_muxchan   0x102    ; MUX on ADC board -> port C
-#define  par_extgainA  0x103    ; external setting (e.g. Gain,ext. MUX) send via SPI
+#define  par_extgainA  0x103    ; external setting (e.g. Gain,ext. MUX) send via SPI - not yet used
 #define  par_extgainB  0x104    ; external setting (e.g. Gain,ext. MUX) send via SPI
+#define  par_syncdel   0x105    ; delay in ADC sync (for testing)
+#define  par_runup_ver 0x106    ; runup version 
 
-#define F_CPU 16000000
-#define BAUD         9600
+#define F_CPU 12000000
+#define BAUD         9600       ; should be more than about 8000 Baud to transmit data during 20 ms conversion 
 #define UBRR_BAUD   ((F_CPU/(16*BAUD))-1)
 
 #define K2_loops 120            ; number of loops for K2 adjust (max about 150 to stay inside 16 bit)
@@ -61,19 +64,21 @@
 #define K1_long 25              ; longer pulse for K1 adjust (usually 20-30) , lmited by length of 2500 cycels to reach 20 ms loop
 #define K1_short 5              ; short pulse for K1 adjust (usually 5)
 
-#define adddel 20               ; added delay (9 cycles each to slow mode)
-#define cyc_222 (F_CPU/50/(222+9*adddel))    
-; number of runup loops for 1 PLC
+#define xdelay 0                ; extra delays: + 3 Zyklen zu Fast, 6 Zyklen normal, 12 Zyklen slow 
 
-; hardware specific definitions 
+#define ru_loop_length (F_CPU/50/(204+12* xdelay))       ; number of runup loops for 1 PLC, slow mode
+
+#define rundown_wait 6          ; Length für rundown  (256 cyles = 16 µs units)
+
+; hardware specific definitions:
 
 .equ  control_pos  = 16           ; pattern for  larger Reference (negativ on BB)  (PD4)
 .equ  control_neg  = 8            ; pattern for  smaller (positive) (PD3)
 .equ  control_Sig  = 4            ; pattern for  Signal             (PD2)
 
-.equ  control_Sigposeg = control_Sig + control_neg  ; pattern for  Signal + small
+.equ  control_Signeg = control_Sig + control_neg  ; pattern for  Signal + small
 .equ  control_Sigpos = control_Sig + control_pos    ; pattern for  Signal + large
-.equ  control_SigSlow = control_Sigposeg + control_pos   ; pattern for  Signal + small + large 
+.equ  control_SigSlow = control_Signeg + control_pos   ; pattern for  Signal + small + large 
 .equ  control_slow = control_pos+control_neg       ; pattern for  small + large = slow 
 .equ  control_hold  = 0                            ; pattern for off
 
@@ -82,21 +87,26 @@
 #define skipCompPos  SBRS t3,ACO    
 #define skipCompNeg  SBRc t3,ACO    
 ; define ports used for ADC control (4053), mux
-#define portSW portd
-#define portMUX portc            ; MUX port   , rest ist Eingang / ADC ohne Pull up !
+#define portSW  portd
+#define portMUX portc            ; MUX port   , rest is input, e.g. ADC inputs
 
 ; mux setting, including fixed part (currently 0)
-#define mux0  8+16+32           ; Mux channel for 0 V = Nr. 8
-#define mux7  16+32             ; mux channel for 7 V ref = Nr. 7
-#define muxTemp  32             ; mux channel for diode (Temp) = Nr. 5
+#define mux0  8*7               ; Mux channel for 0 V = Nr. 7
+#define mux7  8*5               ; mux channel for 7 V ref = Nr. 5 = buffered 7 V
+#define mux1  8*2               ; mux channel 2  
+#define muxTemp  8*4            ; mux channel for diode (Temp) = Nr. 4
 
 
 .equ  ADcontr  = (1 << aden) +  (1<< ADSC) + (1<<ADIF) + 6     ; ADC enable + start  + Flag (to clear) + clock / 64 (6 -> 125 kHz bei 8 MHz)
                                            ; include Interrupt flag to clear flag on start
+.equ  ADcontrStop  =  7        ; Disable ADC, set ADC divider to different values
+
 .equ  ADMUXval = 1 + 64      ;ADC channel (1) + Ref. (64=VCC , 192 = internal , 0 = external)
+
                           
 
 start:
+
     ldi  temp, 7+16+32    ; Data directions:  PB3 is SPI / ISP input , PB0 is unused, start as output 
 	out  DDRB,temp
 	ldi  temp, 32+16+8    ; port for MUX control = PC3/4/5
@@ -105,20 +115,26 @@ start:
 	out DDRD,temp          ; port D ;  D0=Rx, D1 = TX , D2/D3/D4 = 4053,  D5 = level shift ; D6/7 = int_COMP 
 	ldi temp,3
 	sts DIDR1,temp         ; disable digital inputs for comparator pins
-	; Stack is all ready at RAMEND for M48 !
+	; Stack is already at RAMEND for M48 !
 
-	; ADC initialisierung:
-	ldi temp,  ADMUXval         ; ADC channal + speed +  Ref. . for AVCC ref. (no link needed)
-	sts ADMUX,temp
+	; ADC initializing
 	ldi temp, ADcontr     ; ADC config mit start
 	sts ADCSRA,temp 
+	ldi temp,  ADMUXval         ; ADC channal + speed +  Ref. . for AVCC ref. (no link needed)
+	sts ADMUX,temp
+	
 	ldi temp, 1+2         ; Disable digital input for ADC inputs  0 and 1 
 	sts DIDR0, temp
+	ldi temp,1
+	out OCR0A,temp
+	out TCCR0B,temp      ; Start timer 0 (to get OC0A match)
+
 
 	ldi temp, 3           ; setup OCR1A for timinig of rundown loop (time till ADC starts)
 	sts OCR1AH,temp
 	ldi temp,0
 	sts OCR1AL,temp
+
 
     clr reg0      ; register fixed to 0 !  (don't use r0, in case multiplications are used) 
 	LDI XH,2      ; Start UART puffer at 0200
@@ -133,17 +149,26 @@ start:
 	ldi temp, (1<<RXEN0)|(1<<TXEN0)
 	sts  UCSR0B,temp
 
-	ldi temp, low(cyc_222)       ; number of Runup cycles
+	ldi temp, low(ru_loop_length)       ; number of Runup cycles
 	sts par_rustepsL,temp
-	ldi temp, high(cyc_222)    
+	ldi temp, high(ru_loop_length)    
 	sts par_rustepsH,temp
+
+	ldi temp,1
+	sts par_runup_ver,temp    ; default runup mode
+
+	ldi nextmux,8 *1          ; 8 * Channel number
+	sts par_muxchan,nextmux   ; starting point for mux 
 
 	ldi nextmux, mux7
 	out portMUX,nextmux
-	sts par_muxchan,nextmux   ; starting point for mux 
+
+	ldi temp,28
+	sts par_syncdel,temp
 
 	ldi temp,0
 	rcall longdelay 
+	out TCCR0B,temp   ; stop timer 0  (OC0A is set)
 
 	ldi t2,'\n'   ; Data backwards ! Buffer is stack
 	st x+,t2
@@ -156,24 +181,21 @@ start:
     rcall uart_sendall  
 		
 	in   t3,ACSR              ; comparator status
-    skipCompPos                 ; test comparator for sign 
+    skipCompPos               ; test comparator for sign 
 	st x+,t2
     rcall uart_sendall  
 
 	                   ; initial reading may be too early after turn on to give good values !
-	rcall  TestK2      ; alternative measure of K2 (slower but easier)
-	rcall K1_measure
+	rcall  TestK2      ; alternative measure of K2 (slower but easier), also some linearty test for slope amplifier
     rcall K1_measure      ; measure ratio of slow slope to smaller slope
     rcall K2_measure      ; measure µC internal ADC gain relative to slow slope
-	rcall K2_measure      ; start with self cal as a self test    
    
-	; rcall Drifttest  ; test for slope amplifier linearity, hum and drift rate
-	rjmp mslopeA       ; multislope version A   to start 	
+	rjmp mslopeC       ; multislope version C  to start 	
 
 
 ;***********************
-control:     ; check for UART data in and  change control loop accordingly
-             ; attention: no normal subroutine if action taken ! Will not return to caller if control word send !
+control:     ; check for UART data in and change control loop accordingly
+             ; attention: no normal subroutine if action taken ! May not return to caller if control word send !
 
    lds  temp,UCSR0A
    sbrs temp, RXC0   ; test for recieved data
@@ -192,12 +214,15 @@ control1:
    brne control2
    pop temp
    pop temp
-   rjmp dualslope   ; Dual slope  (for tests) 
+   rjmp mslopeD     ; 4 readings cycle 
 control2:
    cpi temp, 'L'     
    brne control3
    pop temp
    pop temp
+   ldi temp,26
+   sts par_syncdel,temp    ; reset delay
+  
    rjmp Adjust_loop2  ; Scale factor measurements, fast version
 control3:
   cpi temp, 'B'
@@ -213,7 +238,8 @@ control4:
    pop temp
    ldi nextmux, muxTemp    ; just for tests use side effect
    sts par_muxchan,nextmux
-   rjmp Adjust_loop  ; Test for scale factors 
+   rjmp Adjust_loop  ; Test for scale factors  old version (slower)
+
 control4b:
  cpi temp, 'I'
    brne control5
@@ -221,13 +247,13 @@ control4b:
    pop temp
    rjmp runup_inf    ; run-up only testmode 
 control5:
-  cpi temp, 'W'        
+  cpi temp, 'Z'        
    brne control6
 contl5:
+   rcall delay8 
    lds  temp,UCSR0A    ;  Wait for sync   --  does not work for some odd reason  
-   nop
-   sbrs temp, RXC0   ; test for recieved data , loop if no data
-   rjmp contl5    ; wait for data
+   sbrs temp, RXC0    ; test for recieved data , loop if no data
+   rjmp contl5       ; wait for data
    lds temp, udr0    ; read UART data to clear flags
    ret       
             
@@ -238,37 +264,66 @@ control6:
    pop temp
    rjmp mslopec    ; Multislope  3 Readings: 0, ref, and Signal(MUX)
 
+  
 control8:
-  cpi temp, 'S'    ; slow down: double integration time
+  cpi temp, 'M'    ; slow down: double integration time
    brne control9
    lds temp,par_rustepsL
    lds t2,par_rustepsH
-   lsl temp    ; * 
+   lsl temp    
    rol t2
    sts par_rustepsL,temp
    sts par_rustepsH,t2
    ret
+
 control9:
-  cpi temp, 'F'   ; fast mode = 1 PLC
-   brne control7
-   ldi temp, low(cyc_222)       ; number of Runup cycles
+  cpi temp, 'F'       ; reset speed to fast mode = 1 PLC
+   brne control10
+   ldi temp, low(ru_loop_length)       ; number of Runup cycles
    sts par_rustepsL,temp
-   ldi temp, high(cyc_222)    
+   ldi temp, high(ru_loop_length)    
    sts par_rustepsH,temp
+   lds temp,par_syncdel
+   inc temp
+
+   sts par_syncdel,temp         ; side effect: increase delay
    ret
+
+control10:
+  cpi temp, 'G'   ; DA test 
+   brne control11
+   pop temp
+   pop temp
+   rjmp DAtest  
+
+control11:
+  cpi temp, 'E'   ; MS E    MSlope with 2 external channels
+   brne control7
+   pop temp
+   pop temp
+   rjmp MslopeE
+
    
 control7:
    mov t2,temp          ; copy 
-   andi temp,0xF0       ; upper bits = command with 4 bits parameter
+   andi temp,0xF8       ; upper bits = command with 3 bits parameter
    cpi temp, '0'        ; command 0,1,2,3,4,5,...
-   brne loopend
+   brne control12
 
    andi t2, 7           ; lower 3 bits 
    lsl  t2              ; shift 3 times to position of MUX control
    lsl  t2
    lsl  t2
    sts  par_muxchan,t2
-   
+  
+control12:
+   cpi temp, 'P'        ; commands P,Q,R,S,T,U,V,W ->  0,1,2,3,4,5,...
+   brne loopend
+
+   andi t2, 7           ; lower 3 bits 
+   sts  par_runup_ver,t2
+      
+
 loopend: 
 ret
 ;  rjmp conrol       ; check for more data, just in case
@@ -298,20 +353,19 @@ uart_ret2:
 
 uart_sendall:
    rcall uart_send
-   tst   xl            ;  XL = 0  means empty buffer 
+   tst   xl              ;  XL = 0  means empty buffer 
    brne uart_sendall
    ret
 
-
-readAD_buf:              ;read ADC and copy data to buffer
+readAD_buf:              ; read ADC and copy data to buffer
 	lds temp, ADCL       ; need to read ADCL first !   
 	lds t2, ADCH
     st x+,t2             ; Store data
     st x+,temp           
 	ret 
 
-fullADC:       ; Start ADC, wait and read to buffer
-    ldi temp, ADcontr     ; ADC config with start 
+fullADC:                 ; Start ADC, wait and read to buffer
+    ldi temp, ADcontr    ; ADC config with start 
     sts ADCSRA,temp
 readAD_wait:   ; wait for ADC to finish and read
     LDS temp, ADCSRA     
@@ -319,19 +373,40 @@ readAD_wait:   ; wait for ADC to finish and read
 	brne readAD_wait
 	rjmp readAD_buf;       ; read AD to buffer and return
 
-AD_wait:       ; wait for ADC to finish
+AD_wait:                   ; wait for ADC to finish
     LDS temp, ADCSRA     
     andi temp, (1<<ADSC)   ; start flag to test ADC ready
 	brne AD_wait
 	ret
+
+
+fine_del:       ; delay with 1 cycle steps,  min value 4 !      temp + 10 Zyklen incl. rcall
+   lsr temp
+   brcs d1
+d1:
+   lsr temp
+   brcc d3
+   nop
+   nop 
+d2:
+   nop
+d3:
+   dec temp
+   brne d2
+   ret
+
 
 Delay2: nop                    ; Delay um 3*temp + 8  incl rcall und RET
 Delay1: nop                    ; Delay um 3*temp + 7  incl rcall und RET
 Delay0: dec temp               ; Delay um 3*temp + 6  incl rcall und RET
         brne Delay0
 		ret
+delay10:nop
+        nop
+Delay8: nop                    ; 8 cycles including rcall and ret
+Delay7: ret
 
-longdelay:                     ; delay by temp*777 cylces + about 10 cylces
+longdelay:                     ; delay by temp*777 cylces + about 10 cylces  (ca. 48.5 µs * temp)
       push t2
 	  mov t2, temp
 	  clr temp
@@ -343,26 +418,62 @@ ldel1:
 	  ret
 
 ;********************** ADC specific subs:
+ADC_sync:              ; Start converion with sync and ADC conversion
+	ldi temp, 1 << TOV1             ; clear OV1 flag, just in case
+	out TIFR1,temp                  
+
+	ldi temp, 4        ; chose Autotrigger source = overflow = not active
+	sts ADCSRB,temp 
+	ldi temp, ADcontr  + (1 << ADATE) - (1<< ADSC)   ; ADC config auto trigger ohne start
+	sts ADCSRA,temp 
+	ldi temp, 3        ; chose Autotrigger source = OC1A - usually active -> trigger   and divider reset 
+	sts ADCSRB,temp 
+	ldi temp,32        ; wait > 32 cylces for ADC to actially start ? not clear if needed, but need to wait anyway, so most of sampling = 96 cyles
+	rcall delay0
+	ldi temp, ADcontr  ; ADC config with start (mainly reset to manual trigger)
+	sts ADCSRA,temp 
+	
+	lds temp,par_syncdel
+    rcall fine_del
+ 	ret
+
 runup_prepare:         ; prepare for runup and run down 
     clr coutAL         ; counter A for Ref. patterns during runup 
 	clr coutAH
-	clr coutBL         ; counter B for Ref. patterns 
+	clr coutBL         ; counter B  (not often used)
 	clr coutBH
+	lds ZL,par_rustepsL         ; get normal number of loops
+	lds ZH,par_rustepsH       
 
-Reset_counter:         ; Reset Timer 1 to prepare for wait for OC1A (e.g. rundown, adjustK )     
+Reset_counter:         ; Stop and reset Timer 1 to prepare for wait for OC1A (e.g. rundown, adjustK )     
     ldi temp,0
 	sts TCCR1B,temp                 ; stop counter
   	STS TCNT1H,temp              
     STS TCNT1L,temp                 
-	ldi temp, 1 << OCF1A            ; clear flag for OC1A  
-	out TIFR1,temp                  ; Clear flag by writing a 1 ! 
+	ldi temp, 1 << OCF1A            ; flag for OC1A  
+	out TIFR1,temp                  ; clear flag by writing a 1 ! 
 	RET
 
-; Variable part of runup pattern, counting of pos phases 
+;********************** Variable part of runup pattern, counting of pos phases, especially useful for multi check version
 variphase1:                  ; with compartor test 
     skipCompPos              ; test comparator for sign 
 	ldi t2,control_Sigpos
-variphase:                   ; variable phase for runup, especially useful for multi check version
+variphase:                   ; Entry point without test 
+	out portSW,t2            ; start variable part
+	clr temp 
+	bst t2, 3                ; bit 3 -> T  (output pos)
+	bld temp,0               ; T -> bit 0 
+	add  coutAL,temp         ; count phases 
+	adc  coutAH,reg0
+	; possibly add debug part (countB) here
+	rjmp uart_send          ; send uart data from buffer if ready 
+	                         ; for higher speed could be moved just before UART_send
+	; save Call+Ret
+
+variphase0:                  ; version with 0 step in between
+	out portSW,temp          ; 0 phase
+	rcall Delay10
+	nop
 	out portSW,t2            ; start variable part
 	clr temp 
 	bst t2, 3                ; bit 3 -> T  (output pos)
@@ -373,163 +484,383 @@ variphase:                   ; variable phase for runup, especially useful for m
 	rcall uart_send          ; send uart data from buffer if ready 
 	                         ; for higher speed could be moved just before UART_send
 	ret                      ; T2 should still be output state 
-	
+
+
 
 ; different versions of runup
 ;*******************************
-runup_PV:    ; multislope runup with 4 comparator test per period (new -untested)
-                               
-    ldi t2,control_Sig              ; start input early, before initial preparations
-	                            ; possibly add offset via reference already on
-	out portSW,t2
-
-	rcall runup_prepare         ; common init
+; runup P3n -  3 step mode 2 comparator readings per loop short break
+;           normal speed          78/12/12 cycles each -> 102 cycle per loop
+runup_P3nF:
+    rcall ADC_sync              ; syncronous start of ADC and wait for sampling 
+    rcall runup_prepare         ; common init
 	ldi t2,control_Sigpos 
-	out portSW,t2                ; Start same as end
-	in  t3,ACSR               ; get comparator status
- 	lds ZL,par_rustepsL         ; number of cycles  - moved here to get min lengt for pulse
-	lds ZH,par_rustepsH       
- 
-runupPV_loop:
-                                ; T2 is old state 
-    skipCompNeg               ; test comparator for sign 
-	 ldi t2,control_Sigposeg             ; possible new direction
-	rcall variphase             ; 1. variable
-	
-	in  t3,ACSR               ; get comparator status
-	                            ; T2 is old state 
-    skipCompNeg                 ; test comparator for sign 
-     ldi t2,control_Sigposeg            ; possible new direction
-	rcall variphase             ; 2nd variable phase
-	in  t3,ACSR               ; get comparator status  ( for 3rd variable part early)
-	nop                         ; compensate for rcall 
-	nop	
-	nop
-	nop
-	ldi t2,control_Sigposeg
-	out portSW,t2                ; fixed phase, end of 1. variable phase
-    nop 
-    nop                         ; compensate for loop end, no need for fixed phase to be exactly the same 
-                                ; T2 is old state 
-    skipCompPos                 ; test comparator for sign 
-	 ldi t2,control_Sigpos            ; possible new direction
-	rcall variphase             ; start of 2 nd variable phase
+  
+runup_P3n:    ; entry point for version via jump table
+	out portSW,t2               ; Start same as end
+	lsl ZL                      ; twice the number of loops
+	rol ZH
+	nop    ; extra delay to get same lenght
+    nop    ; extra delay to get same lenght
+	in  t3,ACSR                 ; get comparator status
 
-	in   t3,ACSR              ; comparator status
-    skipCompPos                 ; test comparator for sign 
-	 ldi t2,control_Sigpos            ; possible new direction
-	rcall variphase             ; 
-	in   t3,ACSR              ; comparator status -- 1st test early !	
-    nop
-	nop
-	sbiw ZH:ZL,1             ; subtract 1 from ZL/ZH - moved up quite a bit
+runupP3n_loop:
+    nop                         ; delay fixed Pos
+	nop                         ; delay fixed Pos
+	nop                         ; delay fixed Pos
+	nop                         ; delay fixed Pos
+	skipCompNeg                 ; test comparator for sign 
+	ldi t2,control_Signeg       ; possible new direction
+	rcall variphase             ; variable
+	ldi  temp, 1+15+ 2*xdelay     
+	rcall delay0       
 	
+	ldi t2,control_Signeg
+	out portSW,t2               ; fixed neg 
+    nop 
+    nop                         ; delay for fixed phase neg
+    nop 
+    nop                         ; delay for fixed phase neg
+    nop 
+    nop                         ; delay for fixed phase n                             
+    in   t3,ACSR                ; comparator status
+	sbiw ZH:ZL,1                ; subtract 1 from ZL/ZH - moved up quite a bit
+    nop
+	ldi t2,control_Sigpos      
+	out portSW,t2               ; fixed pos  
+	BRNE runupP3n_loop 
+	ret
+
+
+	 
+;*******************************
+; runup P3s -  3 step mode 2 comparator readings per loop short break
+;           normal speed, short pulse: 86/8/8 cycles each -> 102 cycle per loop
+
+runup_P3s:    ; entry point for version via jump table
+	out portSW,t2               ; Start same as end
+	lsl ZL         ; twice the number of loops
+	rol ZH
+	nop    ; extra delay to get same lenght
+    nop    ; extra delay to get same lenght
+	in  t3,ACSR                 ; get comparator status
+
+runupP3s_loop:
+    ;nop                         ; delay fixed Pos
+	skipCompNeg                 ; test comparator for sign 
+	ldi t2,control_Signeg       ; possible new direction
+	rcall variphase             ; variable
+	ldi  temp, 1+17+ 2*xdelay     
+	rcall delay2       
+	
+	ldi t2,control_Signeg
+	out portSW,t2               ; fixed neg 
+    nop 
+    nop                         ; delay for fixed phase neg
+                             
+    in   t3,ACSR                ; comparator status
+	sbiw ZH:ZL,1                ; subtract 1 from ZL/ZH - moved up quite a bit
+    nop
+	ldi t2,control_Sigpos      
+	out portSW,t2               ; fixed pos  
+	BRNE runupP3s_loop 
+	ret
+
+;*******************************
+; runup P3sl -  3 step mode 2 comparator readings per loop short break
+;           slow speed          180/12/12 cycles each -> 204 cycle per loop
+
+runup_P3sl:    ; entry point for version via jump table
+	out portSW,t2               ; Start same as end
+	nop        
+	nop
+	nop    ; extra delay to get same lenght
+    nop    ; extra delay to get same lenght
+	in  t3,ACSR                 ; get comparator status
+
+runupP3sl_loop:
+    nop                         ; delay fixed Pos
+	nop                         ; delay fixed Pos
+	nop                         ; delay fixed Pos
+	nop                         ; delay fixed Pos
+	skipCompNeg                 ; test comparator for sign 
+	ldi t2,control_Signeg       ; possible new direction
+	rcall variphase             ; variable
+	ldi  temp, 1+49+ 4*xdelay     
+	rcall delay0       
+	
+	ldi t2,control_Signeg
+	out portSW,t2               ; fixed neg 
+    nop 
+    nop                         ; delay for fixed phase neg
+    nop 
+    nop                         ; delay for fixed phase neg
+    nop 
+    nop                         ; delay for fixed phase n                             
+    in   t3,ACSR                ; comparator status
+	sbiw ZH:ZL,1                ; subtract 1 from ZL/ZH - moved up quite a bit
+    nop
+	ldi t2,control_Sigpos      
+	out portSW,t2               ; fixed pos  
+	BRNE runupP3sl_loop 
+	ret
+	 
+
+
+;*******************************
+; runup P3f -  3 step mode 2 comparator readings per loop 
+;           high speed: 35/8/8 cycles each -> 51 cycle per loop
+
+runup_P3f:    ; entry point for version via jump table
+	out portSW,t2               ; Start same as end
+	lsl ZL         ; twice the number of loops
+	rol ZH
+	lsl ZL         ; twice the number of loops
+	rol ZH
+	in  t3,ACSR                 ; get comparator status
+
+runupP3f_loop:
+    ;nop                         ; delay fixed Pos
+	skipCompNeg                 ; test comparator for sign 
+	ldi t2,control_Signeg       ; possible new direction
+	rcall variphase             ; variable
+	ldi temp,1+xdelay
+	rcall delay2
+	ldi t2,control_Signeg
+	out portSW,t2               ; fixed neg 
+    nop 
+    nop                         ; delay for fixed phase neg
+                             
+    in   t3,ACSR                ; comparator status
+	sbiw ZH:ZL,1                ; subtract 1 from ZL/ZH - moved up quite a bit
+    nop
+	ldi t2,control_Sigpos      
+	out portSW,t2               ; fixed pos  
+	BRNE runupP3f_loop 
+	ret
+
+
+;*******************************
+; runup P4n -  4 step mode 2 comparator readings per loop short break
+;           normal mode, long pulses   2x86/16 cycles each -> 204 cycle per loop
+   
+runup_P4nV:    ; entry point for version via jump table
+	out portSW,t2               ; Start same as end
+	nop         
+	nop
+	nop    ; extra delay to get same lenght
+    nop    ; extra delay to get same lenght
+	in  t3,ACSR                 ; get comparator status
+
+runupP4n_loop:
+    rcall Delay8                ; delay fixed Pos
+	skipCompNeg                 ; test comparator for sign 
+	ldi t2,control_Signeg       ; possible new direction
+	rcall variphase             ; 1. variable
+	ldi  temp, 4 + 2*xdelay      ; delay before comparator test 
+	rcall delay1      
+	in  t3,ACSR                 ; get comparator status
+    ldi  temp, 11                ; delay after comparator test, sould be less than before (incl varph)
+	rcall delay2     
+	
+	ldi t2,control_Signeg
+	out portSW,t2                ; fixed phase, end of 1. variable phase
+	rcall Delay10                ; delay for fixed phase neg
+                                 
+    skipCompPos                 ; test comparator for sign 
+	ldi t2,control_Sigpos       ; possible new direction
+	rcall variphase             ; start of 2 nd variable phase
+	ldi  temp, 4 + 2*xdelay      ; delay before comparator test 
+	rcall delay1       
+	in   t3,ACSR               ; comparator status
+	ldi  temp, 11              ; delay after comparator test, sould be less than before
+	rcall delay0      
+	sbiw ZH:ZL,1              ; subtract 1 from ZL/ZH - moved up quite a bit
 	ldi t2,control_Sigpos      
 	out portSW,t2             ; end of 2 nd variable phase   
-	BRNE runupPV_loop 
+	BRNE runupP4n_loop 
+	ret 
+
+
+
+;**************************************
+jpp3n: rjmp runup_P3n
+jpp3s: rjmp runup_P3s
+jpp3l: rjmp runup_P3l
+
+runup_var:   ; runup phase depending on par_runupver
+;**************************************
+    rcall ADC_sync            ; syncronous start of ADC and wait for sampling 
+	rcall runup_prepare       ; common init
+    ldi t2,control_Sigpos     ; start value 
+    lds temp, par_runup_ver
+	tst temp
+	breq runup_P3f       ;  0 P -> fast
+	dec temp
+	breq jpp3n           ;  1 Q -> normal 
+	dec temp
+	breq jpp3s           ;  2 R -> short pulse 
+	dec temp
+	breq runup_p4nV      ;  3 S -> 4 step
+	dec temp 
+	breq runup_PdV       ;  4 T -> dummy
+	dec temp
+	breq runup_p40V      ;  5 U -> zero step
+	dec temp
+	breq jpp3l           ;  6 V -> long pulse
+	rjmp runup_P3sl      ;  7 W -> slow  
+
+;*********************
+runup_PdV:     ; runup phase for multislopem dummy version, no input, may be useful as low noise zero
+               ;  2x 90/12 =  wie normal mode 
+    ldi temp,control_hold        ; no input !, just to keep timing
+	out portSW,temp
+    nop
+	nop
+    nop
+	nop
+    in   t3,ACSR              ; comparator status for first loop part
+	
+runupPd_loop:
+    rcall Delay8
+	skipCompNeg                 ; test comparator for sign 
+	ldi t2,control_neg       ; possible new direction
+	rcall variphase             ; 1. variable
+	ldi  temp, 31 +2* xdelay    ; delay before comparator test 
+	rcall delay1     
+	in  t3,ACSR                 ; get comparator status
+    ldi  temp, 1                ; delay after comparator test, sould be less than before (incl varph)
+	rcall delay2     
+	ldi t2,control_neg
+	out portSW,t2                ; fixed phase, end of 1. variable phase
+    rcall Delay10                ; delay for fixed phase neg
+                                 
+    skipCompPos                 ; test comparator for sign 
+	ldi t2,control_pos       ; possible new direction
+	rcall variphase             ; start of 2 nd variable phase
+	ldi  temp, 31 +2* xdelay    ; delay before comparator test 
+	rcall delay1      
+	in   t3,ACSR               ; comparator status
+	ldi  temp, 1              ; delay after comparator test, sould be less than before
+	rcall delay0      
+	sbiw ZH:ZL,1              ; subtract 1 from ZL/ZH - moved up quite a bit
+	ldi t2,control_pos      
+	out portSW,t2             ; end of 2 nd variable phase   
+	BRNE runupPd_loop 
 	ret 
 
 ;****************************
-runup_P:            ; runup phase for multislope with: 1 Comparator test per loop (2 PWM cases)
-                    ; slow Version 222 Zyklen = 16+16+190   =  normal mode 
-    ldi temp,control_Sig            ; start input early, before initial preparations:
+runup_P3l:        ; runup phase for multislope with: 1 Comparator test per loop (2 PWM cases)
+                ; Cyle = 66+18+18 = 102 cycles for 1 count
+                
+    ldi temp,control_Sig       ; start input early, before initial preparations:
 	out portSW,temp
-    lds ZL,par_rustepsL         ; number of cycles 
-	lds ZH,par_rustepsH       
-	nop    ; extra delay to get same lenght
-	nop
-    rcall runup_prepare         ; common init
-    in   t3,ACSR              ; comparator status for first loop part
-	
-runupP_loop:
-    ldi temp,3            ; Delay for fixed phase  
-	rcall delay0          ; 3*temp+6 cycles
-                          ; delay for neg phase min lenght 
-  	ldi t2,control_Sigposeg             ; start positive to end negative and better matches rundown 
-	out portSW,t2 
-	ldi temp,2            ; Delay for fixed phase
-	rcall delay1          ; 3*temp+7 cycles
-                          ; extra delay from call in Varipahse
-
-  
-    skipCompPos                ; test register temp comparator for sign 
-	ldi t2,control_Sigpos
-	rcall variphase
-    ldi  temp, 23+2*adddel     ; extra delay to set lenght of pattern (25 für 222 zyklen loop)
-	rcall delay1       
-
-    in   t3,ACSR            ; comparator status (a little after middel of Phase)
-    push temp               ; wert merken (nicht elegant, aber zeit ist ja da)
-    ldi  temp, 22+adddel    ; extra delay to set lenght of pattern
-	rcall delay1       
-	pop temp      
-
-	ldi t2,control_Sigpos         ; neg  ref on , end of variable phase 
-	out portSW,t2            ;  could more to after SBIW ... if needed
-	                        ; add delay for min lenth at top, to get better start of rundown !
-   	sbiw ZH:ZL,1            ; subtract 1 from ZL/ZH
-	BRNE runupP_loop        ; loop
-	ret                     ; end of runup 
-
-;**************************************
-runup_P1:            ; runup phase for multislope with: 1 Comparator test per loop (2 PWM cases) - fast version: 
-                     ; 15+15+44 = 74 zyklen per loop
-                     ; lower useful range 
-    lds ZL,par_rustepsL             ; number of cycles = 3 times normal number
-	lds ZH,par_rustepsH       
 	lsl ZL
 	rol ZH
-    ldi temp,control_Sig            ; start input early, before initial preparations:
-	out portSW,temp
- 
-	lds temp,par_rustepsL         
-	add ZL,temp
-	lds temp,par_rustepsH       
-	adc ZH,temp
-    
-    rcall runup_prepare         ; common init
-    in   t3,ACSR              ; comparator status for first loop part
+    NOP
+	nop
+	in   t3,ACSR              ; comparator status for first loop part , read early for slightly better feedback
 	
-runupP1_loop:
-    nop                         ; delay for neg phase min lenght 
-    nop                         ; delay, to get min lenght
-	nop
-	nop
-    nop                         ; delay, to get min lenght
-	nop
-	nop
-    nop                         ; delay, to get min lenght
-	nop
-	ldi t2,control_Sigposeg             ; start positive to end negative and better matches rundown 
-	out portSW,t2               
-	nop                         ; delay, to get min lenght
-	nop
-	nop
-    nop                         ; delay, to get min lenght
-	nop
-	nop
-    nop
-	nop
-    nop
-
-  
-    skipCompPos                ; test register temp comparator for sign 
+runupP3l_loop:
+    ldi temp,1            ; Delay for fixed phase  
+	rcall delay2          ; 3*temp+6 cycles
+                          ; delay for neg phase min lenght 
+  	ldi t2,control_Signeg ; Start feedback 
+	out portSW,t2 
+	ldi temp,1            ; Delay for fixed phase
+	rcall delay2          ; 3*temp+6 cycles
+                        
+    skipCompPos           ; test register t3 comparator for sign 
 	ldi t2,control_Sigpos
 	rcall variphase
+    ldi  temp, 8+2* xdelay ; extra delay to set lenght of variable part and lenght of pattern
+	rcall delay1      
+    in   t3,ACSR          ; comparator status (a little after middel of Phase)
+    ldi  temp, 1          ; extra delay to set lenght of pattern
+	rcall delay0       
 
-    in   t3,ACSR               ; comparator status
-    push temp                ; wert merken (nicht elegant, aber zeit ist ja da)
-    ldi  temp, 1+adddel      ; extra delay to set lenght of pattern
-	rcall delay1       
-	pop temp      
-
-	ldi t2,control_Sigpos         ; neg  ref on , end of variable phase 
-	out portSW,t2            ;  could more to after SBIW ... if needed
+	ldi t2,control_Sigpos   ; pos ref on, end of variable phase 
+	out portSW,t2           ;  could be after SBIW ... if needed
 	                        ; add delay for min lenth at top, to get better start of rundown !
    	sbiw ZH:ZL,1            ; subtract 1 from ZL/ZH
-	BRNE runupP1_loop        ; loop
+	BRNE runupP3l_loop        ; loop
 	ret                     ; end of runup 
+
+
+;*******************************
+; runup P40 -  4 step mode 2 comparator readings per loop, with 0 phase in between
+;            mod: 78/12/12 cycles each -> 204 cycle per loop
+runup_P40V:    ; entry point for version via jump table
+	mov temp,t2                 ; old state
+    out portSW,t2               ; Start same as end
+	in  t3,ACSR                 ; get comparator status   (first test) 
+	                            ; prepare inital zero phase at start of variable phase
+	skipCompNeg                 ; test comparator for sign 
+	ldi temp,control_Sig        ; pos or 0 if change
+	nop    ; extra delay to get same lenght
+	nop    ; extra delay to get same lenght
+
+runupP40_loop:
+    nop
+	nop
+    nop
+    nop                         ; delay fixed Pos
+    skipCompNeg                 ; test comparator for sign 
+	ldi t2,control_Signeg       ; possible new direction
+	rcall variphase0             ; 1. variable
+	ldi  temp, 1+5+2* xdelay    ; delay before comparator test 
+	rcall delay2                ; delay for active phase 1		
+	ldi  temp, 1                ; delay after comparator test, sould be less than before (incl varph)
+	rcall delay1     
+ 
+	andi t2,control_Signeg      ;   pos -> 0   , neg -> neg
+	out portSW,t2               ; neg or 0  phase
+    nop 
+	nop 
+	nop
+	nop                          
+	nop
+	nop
+    
+	ldi t2,control_Signeg       ; new direction , force neg
+	mov temp,t2                 ; get old state 
+	in  t3,ACSR                 ; get comparator status rather late
 	
+	skipCompPos                 ; test comparator for sign 
+	ldi temp,control_Sig        ; possible new state 0, if change to positive                        
+	out portSW,t2               ; fixed neg phase
+    nop
+	nop
+	nop
+	nop
+    nop
+	nop
+    
+    skipCompPos                 ; test comparator for sign 
+	ldi t2,control_Sigpos       ; possible new direction
+	rcall variphase0            ; start of 2 nd variable phase
+	ldi  temp, 1+5 +2* xdelay   ; delay before comparator test 
+	rcall delay2          
+	ldi  temp, 1                ; delay after comparator test, sould be less than before
+	rcall delay1 
+
+	andi t2,control_Sigpos      ;  neg -> 0 , pos -> pos  insert 0 phase if needed
+	out portSW,t2               ; posiible 0 phase, end of 2. variable phase 
+	nop
+	nop
+    nop
+	nop
+    
+	sbiw ZH:ZL,1               ; subtract 1 from ZL/ZH - moved up quite a bit
+	ldi t2,control_Sigpos      
+	mov temp,t2               ; old state
+	in   t3,ACSR               ; comparator status late 
+	skipCompNeg                 ; test comparator for sign 
+	ldi temp,control_Sig      
+	out portSW,t2             ; fixed POS
+	BRNE runupP40_loop 
+	ret 
+
 
 ;******************************
 ; subroutine rundown : brings integrator back to zero and records data for residual charge
@@ -539,9 +870,10 @@ rundown:
     ldi t2,control_pos
 	out portSW,t2               ; start of Rundown: start with larger Ref.; Input off
 	  ; may need extra delay here  (min length for phase)
-	ldi t2,control_neg       
-	out portMUX, nextmux         ; change MUX for next conversion 
-	LDI temp,1                 ; timer1 start (already 0 and OC1A flag cleared in runup prepare)
+	ldi t2,control_neg        
+	out portMUX, nextmux        ; change MUX for next conversion : DG408 is slower than 4053, so likely no extra delay needed 
+	
+	LDI temp,1                  ; timer1 start (already 0 and OC1A flag cleared in runup prepare)
 	STS TCCR1B,temp
 
 Lrd1: in t3,ACSR             ; comparator status   - wait for comparator
@@ -551,16 +883,16 @@ Lrd1: in t3,ACSR             ; comparator status   - wait for comparator
 	out portSW,t2              ; Rundown: smaller reference (P)
 	lds t1negL,TCNT1L          ; timer value as time stamp 
 	lds t1negH,TCNT1H
-	ldi t2,control_slow            ; value slow slope to come next 
+	ldi t2,control_slow        ; value slow slope to come next 
 
 Lrd2: in t3,ACSR             ; comparator status
     skipCompNeg                ; comparator 
 	rjmp Lrd2
-	; nop                      ; add some overshoot to force longer slow time - already too long ! more like overshoot reduction 
+	; nop                      ; add some overshoot to force longer slow time - already rather long !
 	out portSW,t2              ; slow mode = both references polarity like N
     lds t1posL,TCNT1L          ; time-stamp (End of pos Phase)
 	lds t1posH,TCNT1H
-	ldi t2,control_hold             ; next step is stop
+	ldi t2,control_hold        ; next step is stop
 	nop                        ; some delay in case of ringing -> min length of slow phase
 	nop
 
@@ -568,7 +900,7 @@ Lrd3: in t3,ACSR             ; comparator status
     skipCompPos              
 	rjmp Lrd3
 
-	out portSW,t2               ; stop after slow mode
+	out portSW,t2              ; stop after slow mode
     lds t1slowL,TCNT1L         ; time-stamp (End of slow Phase)
 	lds t1slowH,TCNT1H
 
@@ -579,11 +911,13 @@ Lrd4: in temp,TIFR1            ; Timer flags
 	rjmp Lrd4
 	 
 	ldi temp,5
-	rcall delay0            ; minimum delay after slow mode, should not get relevant anyway !
+	rcall delay0            ; minimum delay after slow mode, usually waiting time should be long enough
 
-     ; ADC starts in sync with ADC clock! ideally cycle time should be a multiple of 64 cycles !
+    lds coutBL, ADCL        ; read ADC value of 1.st conversion and remember
+	lds coutBH, ADCH 
     ldi temp, ADcontr       ; ADC config mit start
-	sts ADCSRA,temp         ; ADC sampling still takes some time (up to 2.5 ADC clock cycles) !
+	sts ADCSRA,temp         
+
 	ret
 
 ;*************************
@@ -604,53 +938,47 @@ rundown_data:                    ; save data from rundown to buffer
 	ret                       
 	
 ;**************************
-mslope0:                  ; ADC conversion mit UART send before and restart ADC
+mslope0:                  ; ADC conversion with UART send before and restart ADC
 	rcall uart_sendall
-	rcall Reset_counter   ; needed for rundown to have OC1A ready
-	rcall rundown         ; includes restart of ADC  , extra rundown is needed, to reduce delay effekt !
-	ldi temp,50           ; wait for sampling
-	rcall delay0
+
 
 mslope1:                  ; 1 conversion in multi slope mode
-    ldi temp, 6           ; length of rundown(time till ADC starts) 6 x 16 µs = 96 µs 
+    ldi temp, rundown_wait  ; length of rundown(time till ADC starts) 
 	sts OCR1AH,temp       ; could be set shorter in final Version, but than more sensitive to fast DA ?
 	ldi temp,0
 	sts OCR1AL,temp
 	
-    rcall runup_P         ; includes runup prepare and send data
+    rcall runup_var       ; includes runup prepare and send data
 	rcall rundown 
-mslope2:                  ; call point for just data collection:
-	rcall readAD_buf      ; read ADC (just before runup)
-	rcall readAD_wait     ; ADC right after rundown ;(for test purpose, data format easier)
-      ldi temp, ADMUXval -1 ; MUX to auxiliary 
-	  sts ADMUX,temp
-	  rcall fullADC              ; start, w
-	  ldi temp,  ADMUXval        ; ADC channal + speed +  Ref. . for AVCC ref. (no link needed)
-	  sts ADMUX,temp
+mslope2:                  ; call point for just data collection of rundown 
+	st x+,coutBH          ; save ADC reading before conversion
+	st x+,coutBL
 
-	ldi temp, ADcontr     ; ADC config with start for 2nd ADC reading
-    sts ADCSRA,temp
+	rcall readAD_wait     ; ADC right after rundown;
+	ldi temp, ADMUXval -1 ; MUX to auxiliary (for next conversion)
+	sts ADMUX,temp
+	rcall fullADC         ; 2nd reading for compatilility , make drift visible (e.g. DA)
+	ldi temp, ADMUXval    ; MUX to res charge 
+	sts ADMUX,temp
 
 	rcall rundown_data
-	;st x+,coutBH          ; save coutB from runup = last output patterns for debug
-	;st x+,coutBL
 	st x+,coutAH          ; save coutA from runup 
 	st x+,coutAL
 
     ldi temp, 60          ; extra wait for ADC Sampling needs 2-3 x 64/128 cycles 
 	rcall delay0
+    ret
 
-  ret
 	
+
 ;******************** measurement modes:
 ; routines called from control loop
-
 runup_inf:                      ; infinite runup phase for initial test and HW adjust help         
-    ldi temp,control_Sig            ; start input early, before initial preparations:
+    ldi temp,control_Sig        ; start input early, before initial preparations:
 	out portSW,temp
 	rcall runup_prepare         ; common init
 runuI_loop:
-    ldi t2,control_Sigposeg              ; Signal + P
+    ldi t2,control_Signeg       ; Signal + P
 	out portSW,t2
     ldi  temp, 3                ; min length
 	rcall delay0  
@@ -658,16 +986,12 @@ runuI_loop:
     in   t3,ACSR              ; comparator status
     skipCompPos               ; test comparator for sign 
 	ldi t2,control_Sigpos
-	out portSW,t2              ; start new pattern soon
-	ldi  temp, 20             ; delay to set Run-up data (2x 16 Bit)
-                              ; Rundown Data (Zeiten für N und P)
-                              ; ADC nach Wandlung
-                              ; ADC vor Wandlung
-                            
+	out portSW,t2             ; start new pattern soon
+	ldi  temp, 20             ; delay 
 	rcall delay0       
 
-	ldi temp,control_Sigpos        ; both refs on 
-	out portSW,temp          ; change to second half !
+	ldi temp,control_Sigpos   ;  
+	out portSW,temp           ; change to second half !
 	rcall control      
 	rjmp runuI_loop
 
@@ -692,22 +1016,25 @@ mslopeA:                  ; run multi-slope mode with Auto Zero via MUX
     rjmp mslopeA
 
 ;****************************
-mslopeB:                      ; run multi-slope, 2 versions for tests 	
-	rcall mslope1          ; 1 st conversion (runup_P)
+mslopeB:                   ; run multi-slope, 2 Runup versions for tests 
+	lds nextmux, par_muxchan;   	
+	
+	rcall mslope1          ; 1 st conversion (normal runup (from var))
 
 	ldi temp,251           ; sync FF FC
     st  x+,temp
 	ldi temp,255
-    st  x+,temp           ; Data are send during next runup, one ADC is ready
-
-    rcall runup_P1         ; include runup prepare and send data and adjusted number of cycles
+    st  x+,temp            ; Data are send during next runup, one ADC is ready	
+	
+	
+    rcall runup_P3nF        ; nromal mode 
 	rcall rundown 
 	rcall mslope2          ; data collecton 2nd conversion
     rcall control          ; Check UART
    rjmp mslopeB
 
 ;********************************
-   mslopeC:               ; run multi-slope, 3 Wandlungen: 0 , 7 , Signal 	
+   mslopeC:               ; run multi-slope, 3 Wandlungen: Signal, 0 , 7 	
     ldi nextmux,mux0      ; mux setting after next conversion 
 	                      ; actual change in MUX is in rundown
 	rcall mslope1         ; 1 st conversion:  Signal
@@ -721,16 +1048,58 @@ mslopeB:                      ; run multi-slope, 2 versions for tests
     rcall mslope1         ; 2 nd conversion:  0
 	
 	lds nextmux, par_muxchan;   
-    rcall mslope1         ; 2 nd conversion:  0
+    rcall mslope1         ; 3 nd conversion:  7
 		
 	rcall control          ; Check UART
    rjmp mslopeC
+
+;********************************
+   mslopeD:               ; run multi-slope, 4 conversions Signal, Signal1, 0 , 7  	
+    ldi nextmux,mux1      ; mux setting after next conversion 
+	                      ; actual change in MUX is in rundown
+	rcall mslope1         ; 1 st conversion:  Signal
+	
+    ldi temp,248          ; sync 
+    st  x+,temp
+	ldi temp,255
+    st  x+,temp           ; send out during next conversion 
+
+	ldi nextmux, mux0    
+
+    rcall mslope1         ; 2 nd conversion:  Kanal 1 (fest)
+
+	ldi nextmux, mux7;   
+    rcall mslope1         ; 3 rd conversion:  0
+
+	lds nextmux, par_muxchan;   
+    rcall mslope1         ; 4 th conversion:  0
+		
+	rcall control          ; Check UART
+   rjmp mslopeD
+
+;********************************
+   mslopeE:               ; run multi-slope, 2 conversions Signal, Signal2  	
+    ldi nextmux,mux1      ; mux setting after next conversion 
+	                      ; actual change in MUX is in rundown
+	rcall mslope1         ; 1 st conversion:  Signal
+	
+    ldi temp,254          ; sync  - Auswertung wie mode A
+    st  x+,temp
+	ldi temp,255
+    st  x+,temp           ; send out during next conversion 
+
+	lds nextmux, par_muxchan;   
+    rcall mslope1         ; 2nd conversion:  Signal 2
+		
+	rcall control          ; Check UART
+   rjmp mslopeE
+		
 
 
 ;*************************
 dualslope:            ; dual slope like conversion: no FB during signal integration
                       ; test mode not optimized for speed, measure and send separate
-   ldi temp, 4        ; time for rundown (till ADC starts) 4 x 32 µs = 128 µs
+   ldi temp, rundown_wait ; time for rundown 
    sts OCR1AH,temp
    ldi temp,0
    sts OCR1AL,temp
@@ -762,26 +1131,94 @@ dualslope:            ; dual slope like conversion: no FB during signal integrat
    rjmp dualslope
 
 ;************************
-Adjust_loop:           ; loop with continuous self cal cycles
-   rcall K1_measure      ; measure ratio of slow slope to smaller slope
-   rcall testK2        ; alternative version of ADC gain check
-   rcall control       ; test UART and possibly leave loop
+DAtest:            ; special test mode to measure capacitor DA:
+                   ; Charge, wait, Run-down, read ADC x7 , wait 20 ms, Rundown, read ADC x 2
+   ldi temp, rundown_wait  ; time for rundown (till ADC starts)
+   sts OCR1AH,temp
+   ldi temp,0
+   sts OCR1AL,temp
+    
+   ldi temp, control_pos   ; integrate positive
+   rcall DA_Step 
+  
+   ldi temp,241       ; sync FF F1
+   st  x+,temp
+   ldi temp,255     
+   st  x+,temp
+
+   ldi temp, control_neg   ; integrate positive
+   rcall DA_Step
+
+   rcall control
+   rjmp DAtest
+
+;************************
+DA_Step:     ; DA test 1 polarität 
+   out portSW, temp     ; Start integration 
+   ldi temp, 160       ; wait for integrate  about 80 µs
+   rcall delay0
+   ldi temp, control_hold   ; integrate stop !
+   out portSW, temp     ; Stop integration  
+
+   rcall uart_sendall   ; send data and wait 
+
+   rcall Reset_counter
+   rcall rundown
+   rcall rundown_data
+
+   rcall readAD_wait   ; read ADC with data to UART buffer ADC  (ADC after conversion)
+   rcall fullADC   ;  Start ADC, wait and read to buffer 
+   rcall fullADC   ;  Start ADC, wait and read to buffer 
+   rcall fullADC   ;  Start ADC, wait and read to buffer 
+   rcall fullADC   ;  Start ADC, wait and read to buffer 
+   rcall fullADC   ;  Start ADC, wait and read to buffer
+   rcall fullADC   ;  Start ADC, wait and read to buffer
+   rcall fullADC   ;  Start ADC, wait and read to buffer
+
+   ldi temp, 8     ; wait 
+   rcall longdelay
+   rcall fullADC   ;  Start ADC, wait and read to buffer 
+   ldi temp, 12    ; wait 
+   rcall longdelay
+   rcall fullADC   ;  Start ADC, wait and read to buffer 
+   ldi temp, 200   ; wait 10 ms 
+   rcall longdelay
+   ldi temp, 200   ; wait 10 ms 
+   rcall longdelay
+  
+   rcall Reset_counter
+   rcall rundown
+   rcall rundown_data
+   rcall readAD_wait   ; read ADC with data to UART buffer ADC  (ADC after conversion)
+   ldi temp,200   ; wait 10 ms 
+   rcall longdelay
+   rcall fullADC   ;  Start ADC, wait and read to buffer 
+   ldi temp,200   ; wait 10 ms 
+   rcall longdelay
+   rcall fullADC   ;  Start ADC, wait and read to buffer 
+   RET
+
+;************************
+
+Adjust_loop:            ; loop with continuous self cal cycles
+   rcall K1_measure     ; measure ratio of slow slope to smaller slope
+   rcall testK2         ; alternative version of ADC gain check
+   rcall control        ; test UART and possibly leave loop
    rjmp Adjust_loop
 
 Adjust_loop2:           ; loop with continuous self cal cycles
-   rcall K1_measure      ; measure ratio of slow slope to smaller slope
-   rcall K1_measure      ; measure ratio of slow slope to smaller slope
-   rcall K2_measure      ; measure µC internal ADC gain relative to slow slope
-   rcall control       ; test UART and possibly leave loop
+   rcall K1_measure     ; measure ratio of slow slope to smaller slope
+   rcall K1_measure     ; measure ratio of slow slope to smaller slope
+   rcall K2_measure     ; measure µC internal ADC gain relative to slow slope
+   rcall control        ; test UART and possibly leave loop
    rjmp Adjust_loop2
-
 
  
 ;  *************  measurements for ref ratio to calculate result:
 ;  measures ratio of fast to slow slope 
 ;  test with 15 is a kind of sanity check, can be removed later,
 K1_measure:               
-   ldi temp,9            ; 9*32 µs  Length of 1 test pattern (also sets upper limit to pos time)
+   ldi temp,12            ; 9*32 µs  Length of 1 test pattern (also sets upper limit to pos time)
    sts OCR1AH,temp       ;   
    ldi temp,150
    sts OCR1AL,temp       ; set timer limit for inner loop length (312 µs to get 20 ms total)
@@ -867,7 +1304,6 @@ abgl2: in temp,TIFR1          ; Timer flags
    
    rcall uart_sendall
    ret
-
 
 ;************ measurement of µC internal ADC scale (K2) 
 ;         with FB loop for single point near center of ADC range
@@ -1164,3 +1600,49 @@ dtest1:                 ; loop to send raw µC internal ADC data
   dec  coutAL
   brne dtest1         ; loop for data
   ret
+
+
+
+
+	
+;*******************************
+; runup P4f - 4 step mode fast, 2 comparator readings per loop
+;           fast mod: 41/10 cycles each -> 102 cycle per loop
+runup_P4fV:    ; entry point for version via jump table 
+	out portSW,t2               ; Start same as end
+	lsl ZL
+	rol ZH
+	lsl ZL
+	rol ZH
+	in  t3,ACSR                 ; get comparator status
+
+runupP4f_loop:
+    nop                         ; delay fixed Pos
+	nop
+    skipCompNeg                 ; test comparator for sign 
+	ldi t2,control_Signeg       ; possible new direction
+	rcall variphase             ; 1. variable
+	in  t3,ACSR                 ; get comparator status
+                                ; delay for active phase 1		
+	ldi  temp, 1 + xdelay       ; delay after comparator test, sould be less than before (incl varph)
+	rcall delay2     
+	
+	ldi t2,control_Signeg
+	out portSW,t2                ; fixed phase, end of 1. variable phase
+    nop 
+    nop                         ; delay for fixed phase neg
+	nop
+	nop
+                                 
+    skipCompPos                 ; test comparator for sign 
+	ldi t2,control_Sigpos       ; possible new direction
+	rcall variphase             ; start of 2 nd variable phase
+	in   t3,ACSR                ; comparator status
+	ldi  temp, 1 + xdelay       ; delay after comparator test, sould be less than before
+	rcall delay0       
+	sbiw ZH:ZL,1             ; subtract 1 from ZL/ZH - moved up quite a bit
+	
+	ldi t2,control_Sigpos      
+	out portSW,t2             ; end of 2 nd variable phase   
+	BRNE runupP4f_loop 
+	ret 
