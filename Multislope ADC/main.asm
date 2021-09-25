@@ -64,7 +64,7 @@
 #define K1_long 25              ; longer pulse for K1 adjust (usually 20-30) , lmited by length of 2500 cycels to reach 20 ms loop
 #define K1_short 5              ; short pulse for K1 adjust (usually 5)
 
-#define xdelay 0                ; extra delays: + 3 Zyklen zu Fast, 6 Zyklen normal, 12 Zyklen slow 
+#define xdelay 12               ; extra delays: + 3 Zyklen zu Fast, 6 Zyklen normal, 12 Zyklen slow 
 
 #define ru_loop_length (F_CPU/50/(204+12* xdelay))       ; number of runup loops for 1 PLC, slow mode
 
@@ -238,7 +238,7 @@ control4:
    pop temp
    ldi nextmux, muxTemp    ; just for tests use side effect
    sts par_muxchan,nextmux
-   rjmp Adjust_loop  ; Test for scale factors  old version (slower)
+   rjmp Adjust_loop  ; Test for scale factors  old version (slower) not for every HW
 
 control4b:
  cpi temp, 'I'
@@ -283,10 +283,11 @@ control9:
    sts par_rustepsL,temp
    ldi temp, high(ru_loop_length)    
    sts par_rustepsH,temp
+
    lds temp,par_syncdel
    inc temp
-
    sts par_syncdel,temp         ; side effect: increase delay
+   
    ret
 
 control10:
@@ -297,7 +298,7 @@ control10:
    rjmp DAtest  
 
 control11:
-  cpi temp, 'E'   ; MS E    MSlope with 2 external channels
+  cpi temp, 'E'   ; MS E    MSlope with 2 external channels, pseudo differential
    brne control7
    pop temp
    pop temp
@@ -489,7 +490,7 @@ variphase0:                  ; version with 0 step in between
 
 ; different versions of runup
 ;*******************************
-; runup P3n -  3 step mode 2 comparator readings per loop short break
+; runup P3n -  3 step mode 1 comparator reading per loop short break
 ;           normal speed          78/12/12 cycles each -> 102 cycle per loop
 runup_P3nF:
     rcall ADC_sync              ; syncronous start of ADC and wait for sampling 
@@ -534,7 +535,7 @@ runupP3n_loop:
 
 	 
 ;*******************************
-; runup P3s -  3 step mode 2 comparator readings per loop short break
+; runup P3s -  3 step mode 
 ;           normal speed, short pulse: 86/8/8 cycles each -> 102 cycle per loop
 
 runup_P3s:    ; entry point for version via jump table
@@ -567,7 +568,7 @@ runupP3s_loop:
 	ret
 
 ;*******************************
-; runup P3sl -  3 step mode 2 comparator readings per loop short break
+; runup P3sl -  3 step mode 
 ;           slow speed          180/12/12 cycles each -> 204 cycle per loop
 
 runup_P3sl:    ; entry point for version via jump table
@@ -608,8 +609,7 @@ runupP3sl_loop:
 
 
 ;*******************************
-; runup P3f -  3 step mode 2 comparator readings per loop 
-;           high speed: 35/8/8 cycles each -> 51 cycle per loop
+; runup P3f -  3 step mode,   high speed: 35/8/8 cycles each -> 51 cycle per loop
 
 runup_P3f:    ; entry point for version via jump table
 	out portSW,t2               ; Start same as end
@@ -750,7 +750,7 @@ runupPd_loop:
 	ret 
 
 ;****************************
-runup_P3l:        ; runup phase for multislope with: 1 Comparator test per loop (2 PWM cases)
+runup_P3l:        ; runup phase for multislope with: 1 Comparator test per loop , long pulse
                 ; Cyle = 66+18+18 = 102 cycles for 1 count
                 
     ldi temp,control_Sig       ; start input early, before initial preparations:
@@ -957,7 +957,12 @@ mslope2:                  ; call point for just data collection of rundown
 	rcall readAD_wait     ; ADC right after rundown;
 	ldi temp, ADMUXval -1 ; MUX to auxiliary (for next conversion)
 	sts ADMUX,temp
-	rcall fullADC         ; 2nd reading for compatilility , make drift visible (e.g. DA)
+
+    lds temp,par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
+    rcall longdelay       ; schon viel delay ! (startwert ist 26 -> 1.6 ms)
+
+
+	rcall fullADC         ; 2nd reading for simpler data format , make drift visible (e.g. DA)
 	ldi temp, ADMUXval    ; MUX to res charge 
 	sts ADMUX,temp
 
@@ -1001,7 +1006,7 @@ mslopeA:                  ; run multi-slope mode with Auto Zero via MUX
 
     ldi nextmux,mux0      ; mux setting after next conversion 
 	                      ; actual change in MUX is in rundown
-	rcall mslope0         ; 1 st conversion:  Signal
+	rcall mslope1         ; 1 st conversion:  Signal
 	
     ldi temp,254          ; sync FF FE
     st  x+,temp
@@ -1010,7 +1015,7 @@ mslopeA:                  ; run multi-slope mode with Auto Zero via MUX
 
 	lds nextmux, par_muxchan;   
 
-    rcall mslope0         ; 2 nd conversion:  0
+    rcall mslope1         ; 2 nd conversion:  0
 
 	rcall control         ; check for UART command, possibly leave loop !
     rjmp mslopeA
@@ -1072,7 +1077,7 @@ mslopeB:                   ; run multi-slope, 2 Runup versions for tests
     rcall mslope1         ; 3 rd conversion:  0
 
 	lds nextmux, par_muxchan;   
-    rcall mslope1         ; 4 th conversion:  0
+    rcall mslope1         ; 4 th conversion:  7 V
 		
 	rcall control          ; Check UART
    rjmp mslopeD
@@ -1548,6 +1553,8 @@ tstK2_L: in temp,TIFR1         ; Timer flags
 tk2_end:
 ret
 
+;****
+; dead code :
 
 ;***************************
 ; Test for linearity of the slope amplifier:
