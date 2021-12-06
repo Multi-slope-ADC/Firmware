@@ -365,9 +365,17 @@ readAD_buf:              ; read ADC and copy data to buffer
 	lds t2, ADCH
     st x+,t2             ; Store data
     st x+,temp           
+    ; Debug: reset DAC_CS when ADC read finished
+    ldi temp, 0b00000000   ; set pin 0 on Port B to LOW state
+    out PORTB, temp
+    ; Debug end
 	ret 
 
 fullADC:                 ; Start ADC, wait and read to buffer
+    ; Debug: set DAC_CS when ADC read starts
+    ldi temp, 0b00000001   ; set pin 0 on Port B to HIGH state
+    out PORTB, temp
+    ; Debug end
     ldi temp, ADcontr    ; ADC config with start 
     sts ADCSRA,temp
 readAD_wait:   ; wait for ADC to finish and read
