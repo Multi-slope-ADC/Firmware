@@ -873,7 +873,7 @@ rundown:
 	out portSW,t2               ; start of Rundown: start with larger Ref.; Input off
 	  ; may need extra delay here  (min length for phase)
 	ldi t2,control_neg        
-	out portMUX, nextmux        ; change MUX for next conversion : DG408 is slower than 4053, so likely no extra delay needed 
+	/*out portMUX, nextmux        ; change MUX for next conversion : DG408 is slower than 4053, so likely no extra delay needed */
 	
 	LDI temp,1                  ; timer1 start (already 0 and OC1A flag cleared in runup prepare)
 	STS TCCR1B,temp
@@ -959,6 +959,8 @@ mslope2:                  ; call point for just data collection of rundown
 	rcall readAD_wait     ; ADC right after rundown;
 	ldi temp, ADMUXSlp    ; MUX to auxiliary (for next conversion)
 	sts ADMUX,temp
+	; Debug change input mux after ADC readout
+	out portMUX, nextmux        ; change MUX for next conversion : DG408 is slower than 4053, so likely no extra delay needed 
 
     lds temp,par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
     rcall longdelay       ; schon viel delay ! (startwert ist 26 -> 1.6 ms)
