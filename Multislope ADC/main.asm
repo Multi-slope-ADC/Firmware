@@ -960,9 +960,18 @@ mslope2:                  ; call point for just data collection of rundown
 	ldi temp, ADMUXSlp    ; MUX to auxiliary (for next conversion)
 	sts ADMUX,temp
 
-    lds temp,par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
+    lds temp, par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
     rcall longdelay       ; schon viel delay ! (startwert ist 26 -> 1.6 ms)
-
+    lds temp, par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
+    rcall longdelay       ; schon viel delay ! (startwert ist 26 -> 1.6 ms)
+    lds temp, par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
+    rcall longdelay       ; schon viel delay ! (startwert ist 26 -> 1.6 ms)
+    lds temp, par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
+    rcall longdelay       ; schon viel delay ! (startwert ist 26 -> 1.6 ms)
+    lds temp, par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
+    rcall longdelay       ; schon viel delay ! (startwert ist 26 -> 1.6 ms)
+    lds temp, par_syncdel  ; extra delay to check delayed effect  (some gets hidden by wait for ADC)
+    rcall longdelay       ; schon viel delay ! (startwert ist 26 -> 1.6 ms)
 
 	rcall fullADC         ; 2nd reading for simpler data format , make drift visible (e.g. DA)
 	ldi temp, ADMUXICh    ; MUX to res charge
