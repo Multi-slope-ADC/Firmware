@@ -54,7 +54,7 @@
 #define  par_syncdel   0x105    ; delay in ADC sync (for testing)
 #define  par_runup_ver 0x106    ; runup version 
 
-#define F_CPU 12000000
+#define F_CPU 12000000          ; Clock frequency of µC - change accordingly
 #define BAUD         9600       ; should be more than about 8000 Baud to transmit data during 20 ms conversion 
 #define UBRR_BAUD   ((F_CPU/(16*BAUD))-1)
 
@@ -68,7 +68,7 @@
 
 #define ru_loop_length (F_CPU/50/(204+12* xdelay))       ; number of runup loops for 1 PLC, slow mode
 
-#define rundown_wait 6          ; Length für rundown  (256 cyles = 16 µs units)
+#define rundown_wait 6          ; delay after run-down before µC adc read (256 cyles = 16 µs units) standard = 6
 
 ; hardware specific definitions:
 
@@ -101,7 +101,7 @@
 #define ADMUXICh 0 + REFS       ; ATMEGA ADC input channel for integrator charge level - output of U13B (ADC0 = 0 ... ADC7 = 7)
 #define ADMUXSlp 1 + REFS       ; ATMEGA ADC input channel for slope output level - output of U13A (ADC0 = 0 ... ADC7 = 7)
 
-.equ  ADcontr  = (1 << aden) +  (1<< ADSC) + (1<<ADIF) + 6     ; ADC enable + start  + Flag (to clear) + clock / 64 (6 -> 125 kHz bei 8 MHz)
+.equ  ADcontr  = (1 << ADEN) +  (1<< ADSC) + (1<<ADIF) + 6     ; ADC enable + start  + Flag (to clear) + ADC Prescaler clock (5 = /32, 6 = /64 -> 125 kHz bei 8 MHz, 7 = /128)
                                            ; include Interrupt flag to clear flag on start
 .equ  ADcontrStop  =  7        ; Disable ADC, set ADC divider to different values
 
