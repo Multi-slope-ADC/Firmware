@@ -4,7 +4,9 @@
 ; Created: 19.07.2018 
 ; Author / Copyright : Ulrich Harms
 ;  free for private and educational use, if the copyright note is kept
-;   
+;  
+;  Modifications by Michael Dittrich
+;  
 ;  Hardware: 
 ;  Signal control  = PD2            active on high
 ;  Ref control     = PD3/4
