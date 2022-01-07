@@ -1033,10 +1033,11 @@ mslopeB:                   ; run multi-slope, 2 Runup versions for tests
 	ldi temp,255
     st  x+,temp            ; Data are send during next runup, one ADC is ready	
 	
+    rcall mslope1          ; 2 nd conversion
 	
-    rcall runup_P3nF        ; nromal mode 
+/*    rcall runup_P3nF       ; nromal mode 
 	rcall rundown 
-	rcall mslope2          ; data collecton 2nd conversion
+	rcall mslope2          ; data collecton 2nd conversion*/
     rcall control          ; Check UART
    rjmp mslopeB
 
